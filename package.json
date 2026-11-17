@@ -11,7 +11,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "emulator:build": "docker build -t aws-emulator local/emulator",
+    "emulator": "tsx local/start-emulator.ts",
+    "dev": "tsx local/launch.ts local/server.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1170.0",
