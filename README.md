@@ -1,5 +1,7 @@
 # order-status-notifier
 
+[![CI](https://github.com/DalmoHenrique/order-status-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/DalmoHenrique/order-status-notifier/actions/workflows/ci.yml)
+
 Order status notifications over a queue, built to survive the two things that always happen in event-driven systems: **the same event arrives more than once, and events arrive out of order.**
 
 A store publishes order updates (`ORDER_PLACED` → `PAYMENT_APPROVED` → `SHIPPED` → `OUT_FOR_DELIVERY` → `DELIVERED`). Each update should become exactly one message to the customer, never a repeat and never a step backwards.
