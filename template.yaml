@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Order status notifications - API Gateway, SQS with DLQ, Lambda and DynamoDB.
+
+Parameters:
+  MessageProvider:
+    Type: String
+    Default: simulator
+    AllowedValues: [simulator, whatsapp]
+  NotificationsEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  WhatsAppPhoneNumberId:
+    Type: String
+    Default: ''
+  WhatsAppAccessToken:
+    Type: String
+    Default: ''
+    NoEcho: true
+  WhatsAppTemplateName:
+    Type: String
+    Default: hello_world
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 15
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: Text
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref NotificationsTable
+        QUEUE_URL: !Ref OrderEventsQueue
+
+Resources:
+  Api:
+    Type: AWS::Serverless::HttpApi
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: ingest.handler
+      Events:
+        PostEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Method: POST
+            Path: /events
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt OrderEventsQueue.QueueName
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/ingest.ts]
+
+  NotifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: notifier.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          MESSAGE_PROVIDER: !Ref MessageProvider
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          WHATSAPP_PHONE_NUMBER_ID: !Ref WhatsAppPhoneNumberId
+          WHATSAPP_ACCESS_TOKEN: !Ref WhatsAppAccessToken
+          WHATSAPP_TEMPLATE_NAME: !Ref WhatsAppTemplateName
+      Events:
+        OrderEvents:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OrderEventsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref NotificationsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/notifier.ts]
+
+  ActivityFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: activity.handler
+      Events:
+        GetActivity:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Method: GET
+            Path: /orders/{orderId}/activity
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref NotificationsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Target: es2022
+        Sourcemap: true
+        EntryPoints: [src/handlers/activity.ts]
+
+  # AWS recommends a visibility timeout of at least six times the function timeout,
+  # so a slow batch isn't redelivered while it's still being processed.
+  OrderEventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OrderEventsDLQ.Arn
+        maxReceiveCount: 3
+
+  OrderEventsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
+  DLQNotEmptyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Order events are failing and piling up in the dead-letter queue.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt OrderEventsDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  NotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the HTTP API
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com
+  DeadLetterQueueUrl:
+    Value: !Ref OrderEventsDLQ
