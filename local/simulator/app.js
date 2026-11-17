@@ -10,6 +10,9 @@ const OUTCOMES = {
 
 const $ = (id) => document.getElementById(id);
 let lastEvent = null;
+let lastSignature = '';
+let chatOrderId = '';
+const shownMessages = new Set();
 
 function label(status) {
   return status.replaceAll('_', ' ').toLowerCase();
@@ -71,23 +74,55 @@ function renderActivity(items) {
     })
     .join('');
 
-  const sent = items.filter((item) => item.outcome === 'sent');
-  $('chat').innerHTML = sent.length
-    ? sent
-        .map((item) => `<div class="bubble">${item.message}<time>${new Date(item.at).toLocaleTimeString()}</time></div>`)
-        .join('')
-    : '<p class="phone-empty small-text">Messages the customer receives show up here.</p>';
-  $('chat').scrollTop = $('chat').scrollHeight;
+  renderChat(items.filter((item) => item.outcome === 'sent'));
+}
+
+// I only append bubbles the phone hasn't shown yet. Rebuilding the whole chat
+// every poll would replay the arrival animation and make the screen flicker.
+function renderChat(sent) {
+  const chat = $('chat');
+  const orderId = $('orderId').value.trim();
+  if (orderId !== chatOrderId) {
+    chatOrderId = orderId;
+    shownMessages.clear();
+    chat.innerHTML = '';
+  }
+
+  if (sent.length === 0 && shownMessages.size === 0) {
+    chat.innerHTML = '<p class="phone-empty small-text">Messages the customer receives show up here.</p>';
+    return;
+  }
+  chat.querySelector('.phone-empty')?.remove();
+
+  for (const item of sent) {
+    const key = `${item.eventId}#${item.at}`;
+    if (shownMessages.has(key)) continue;
+    shownMessages.add(key);
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = item.message;
+    const time = document.createElement('time');
+    time.textContent = new Date(item.at).toLocaleTimeString();
+    bubble.append(time);
+    chat.append(bubble);
+    chat.scrollTop = chat.scrollHeight;
+  }
 }
 
 async function refresh() {
+  if (document.hidden) return;
   try {
     const orderId = encodeURIComponent($('orderId').value.trim());
     const [activity, state] = await Promise.all([
       fetch(`/orders/${orderId}/activity`).then((r) => r.json()),
       fetch('/admin/state').then((r) => r.json()),
     ]);
-    renderActivity(activity.items || []);
+    const items = activity.items || [];
+    const signature = `${orderId}|${JSON.stringify(items)}`;
+    if (signature !== lastSignature) {
+      lastSignature = signature;
+      renderActivity(items);
+    }
     $('queueDepth').textContent = state.queueDepth;
     $('dlqDepth').textContent = state.dlqDepth;
     $('providerDown').checked = state.providerDown;
@@ -138,6 +173,9 @@ function init() {
   $('providerDown').onchange = (e) => setPipeline({ providerDown: e.target.checked });
   $('notificationsEnabled').onchange = (e) => setPipeline({ notificationsEnabled: e.target.checked });
 
+  // Delivery happens behind a queue, so the page polls to see results land.
+  // It stops while the tab is in the background.
+  document.addEventListener('visibilitychange', refresh);
   refresh();
   setInterval(refresh, 1000);
 }
