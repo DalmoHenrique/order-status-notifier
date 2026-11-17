@@ -6,7 +6,7 @@ A store publishes order updates (`ORDER_PLACED` → `PAYMENT_APPROVED` → `SHIP
 
 I built this after dealing with exactly that in production: a notification pipeline where an upstream service republished the same event and customers got the same message many times. Here I wanted to solve it properly on the consumer side, instead of trusting every producer to behave.
 
-![Local simulator](docs/simulator.png)
+![The local simulator: a duplicate event is blocked and an older status is ignored](docs/demo.gif)
 
 ## Architecture
 
